@@ -1,128 +1,131 @@
+import { useMemo, useState } from "react";
 import "./styles.css";
+import { DetailPanel } from "./components/DetailPanel";
+import { LabCompare } from "./components/LabCompare";
+import { LedgerView } from "./components/LedgerView";
+import { ListView } from "./components/ListView";
+import { fold, viewOf, viewsOf, HUM_MAX, HUM_MIN, TEMP_MAX, TEMP_MIN } from "./domain/engine";
+import { store, useEvents, useSettings } from "./state/store";
+import type { BatchStatus } from "./domain/types";
 
-const project = {
-  "sourceNo": 7,
-  "id": "hxyfront-62012",
-  "port": 62012,
-  "title": "纺织染整小样管理",
-  "domain": "纺织染整",
-  "prompt": "我需要一个纺织染整实验室的小样管理前端系统，可以记录面料成分、克重、染料配方、浴比、温度曲线、保温时间、后整理方式、色差值和评审结果。页面需要有小样批次列表、配方比例展示、Lab色差对比、工艺曲线摘要和按客户订单筛选。",
-  "palette": [
-    "#be123c",
-    "#4f46e5",
-    "#16a34a"
-  ],
-  "metrics": [
-    "小样批次",
-    "色差超限",
-    "客户订单",
-    "通过率"
-  ],
-  "filters": [
-    "棉",
-    "涤纶",
-    "锦纶",
-    "混纺"
-  ],
-  "fields": [
-    "面料成分",
-    "克重",
-    "染料配方",
-    "浴比",
-    "保温时间",
-    "色差值"
-  ],
-  "records": [
-    [
-      "LAB-620A",
-      "棉府绸120g",
-      "ΔE 0.84",
-      "评审通过"
-    ],
-    [
-      "LAB-621C",
-      "涤纶针织",
-      "升温曲线偏快",
-      "待复染"
-    ],
-    [
-      "LAB-624B",
-      "混纺斜纹",
-      "后整理柔软剂2%",
-      "客户确认中"
-    ]
-  ]
-};
+type Tab = "list" | "lab" | "ledger";
 
-function App() {
+const TABS: Array<{ key: Tab; label: string }> = [
+  { key: "list", label: "批次列表" },
+  { key: "lab", label: "Lab 对比" },
+  { key: "ledger", label: "判级台账" },
+];
+
+export default function App() {
+  const events = useEvents();
+  const settings = useSettings();
+  const [tab, setTab] = useState<Tab>("list");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [limitDraft, setLimitDraft] = useState(String(settings.limit));
+
+  const views = useMemo(() => viewsOf(events), [events]);
+  const selected = useMemo(
+    () => (selectedId ? fold(events).find((b) => b.id === selectedId) : undefined),
+    [events, selectedId],
+  );
+  const selectedView = selected ? viewOf(selected) : null;
+
+  const stats = useMemo(() => {
+    const count = (s: BatchStatus) => views.filter((v) => v.status === s).length;
+    const blocked = count("CONDITIONING") + count("RETEST");
+    const graded = views.filter((v) => v.status === "GRADED");
+    const pass = graded.filter((v) => v.activeGrade?.pass).length;
+    const passRate = graded.length ? Math.round((pass / graded.length) * 100) : 0;
+    return { total: views.length, blocked, pass, passRate };
+  }, [views]);
+
+  const selectBatch = (id: string) => {
+    setSelectedId(id);
+    setTab("list");
+  };
+
   return (
     <main className="app">
-      <section className="hero">
-        <p>{project.id} · 源提示词{project.sourceNo} · Port {project.port}</p>
-        <h1>{project.title}</h1>
-        <span>{project.prompt}</span>
-      </section>
+      <header className="topbar panel">
+        <div>
+          <p className="kicker">纺织染整实验室</p>
+          <h1>小样回潮判级台</h1>
+          <p className="muted">
+            先回潮后判色 · 环境 {TEMP_MIN}~{TEMP_MAX}℃ / {HUM_MIN}~{HUM_MAX}%RH ·
+            相邻称量差 ≤0.5% · 补测仅追加，首个合格生效 · 改克重旧判级即废
+          </p>
+        </div>
+        <div className="topbar-tools">
+          <label className="limit-set">
+            合格 ΔE00 上限
+            <input
+              type="number"
+              step="0.1"
+              min="0.1"
+              value={limitDraft}
+              onChange={(e) => setLimitDraft(e.target.value)}
+            />
+            <button
+              onClick={() => {
+                const n = Number(limitDraft);
+                if (n > 0) store.setSettings({ limit: n });
+              }}
+            >
+              应用
+            </button>
+          </label>
+          <button onClick={() => store.resetToSeed()}>恢复演示数据</button>
+          <button onClick={() => store.clearAll()}>清空</button>
+        </div>
+      </header>
 
       <section className="metrics">
-        {project.metrics.map((metric: string, index: number) => (
-          <article key={metric}>
-            <small>{metric}</small>
-            <strong>{[28, 6, 14, 91][index] ?? 10}</strong>
-          </article>
+        <article>
+          <small>批次总数</small>
+          <strong>{stats.total}</strong>
+        </article>
+        <article>
+          <small>回潮中/待复测（不可判色）</small>
+          <strong className="warn-num">{stats.blocked}</strong>
+        </article>
+        <article>
+          <small>已判级合格</small>
+          <strong className="ok-num">{stats.pass}</strong>
+        </article>
+        <article>
+          <small>判级通过率</small>
+          <strong>{stats.passRate}%</strong>
+        </article>
+      </section>
+
+      <nav className="tabs">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            className={tab === t.key ? "tab active" : "tab"}
+            onClick={() => setTab(t.key)}
+          >
+            {t.label}
+          </button>
         ))}
-      </section>
+      </nav>
 
-      <section className="workspace">
-        <aside className="panel">
-          <h2>{project.domain}分类</h2>
-          <div className="chips">
-            {project.filters.map((item: string) => (
-              <button key={item}>{item}</button>
-            ))}
-          </div>
-        </aside>
-
-        <section className="panel form-panel">
-          <div className="heading">
-            <div>
-              <p>专业字段</p>
-              <h2>新增记录</h2>
-            </div>
-            <button className="primary">保存记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
-      </section>
-
-      <section className="panel">
-        <div className="heading">
-          <div>
-            <p>近期记录</p>
-            <h2>工作台摘要</h2>
-          </div>
-          <button>导出CSV</button>
+      <div className="layout">
+        <div className="layout-main">
+          {tab === "list" && (
+            <ListView views={views} selectedId={selectedId} onSelect={setSelectedId} />
+          )}
+          {tab === "lab" && <LabCompare events={events} onSelect={selectBatch} />}
+          {tab === "ledger" && <LedgerView events={events} onSelect={selectBatch} />}
         </div>
-        <div className="records">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")}>
-              <b>{String(index + 1).padStart(2, "0")}</b>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
+        <div className="layout-side">
+          <DetailPanel view={selectedView} onClose={() => setSelectedId(null)} />
         </div>
-      </section>
+      </div>
+
+      <footer className="footnote muted">
+        数据保存在浏览器 localStorage（事件溯源，append-only）；刷新页面、同一浏览器多标签页之间状态保持一致。
+      </footer>
     </main>
   );
 }
-
-export default App;
